@@ -3,5 +3,12 @@
 version = 3
 
 [[package]]
+name = "CPU"
+version = "0.1.0"
+
+[[package]]
 name = "rust_nes"
 version = "0.1.0"
+dependencies = [
+ "CPU",
+]
