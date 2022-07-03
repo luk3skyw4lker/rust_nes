@@ -1,10 +1,10 @@
 #![allow(non_snake_case)]
 use crate::CPU;
 
-type InstructionFunc = fn(&CPU) -> ();
-type AddessingMode = fn() -> ();
+type InstructionFunc = fn(&mut CPU) -> u8;
+type AddessingMode = fn(&mut CPU) -> u8;
 
-enum InstructionsNames {
+pub enum InstructionsNames {
 	ADC,
 	AND,
 	ASL,
@@ -64,10 +64,10 @@ enum InstructionsNames {
 }
 
 pub struct Instruction {
-	name: InstructionsNames,
-	function: InstructionFunc,
-	mode: AddessingMode,
-	cycles: u8,
+	pub name: InstructionsNames,
+	pub function: InstructionFunc,
+	pub mode: AddessingMode,
+	pub cycles: u8,
 }
 
 impl Instruction {
