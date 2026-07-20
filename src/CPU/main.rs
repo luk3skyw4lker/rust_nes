@@ -70,10 +70,10 @@ impl CPU {
 
     // Internal Functions
     pub fn reset(&mut self) -> () {
-        let hi: u8 = self.bus.read(0xFFFC);
-        let low: u8 = self.bus.read(0xFFFD);
+        let lo: u8 = self.bus.read(0xFFFC);
+        let hi: u8 = self.bus.read(0xFFFD);
 
-        self.pc = u16::from_le_bytes([hi, low]);
+        self.pc = u16::from_le_bytes([lo, hi]);
 
         self.a = 0;
         self.x = 0;
@@ -94,7 +94,6 @@ impl CPU {
             self.set_flag(Flags::I, 1);
 
             self.push(self.status as u8);
-            self.sp = self.sp.wrapping_sub(1);
 
             self.pc = self.read_u16_le(0xFFFE);
 
@@ -111,7 +110,6 @@ impl CPU {
         self.set_flag(Flags::I, 1);
 
         self.push(self.status as u8);
-        self.sp = self.sp.wrapping_sub(1);
 
         self.pc = self.read_u16_le(0xFFFA);
 
@@ -153,10 +151,10 @@ impl CPU {
     }
 
     fn read_u16_le(&mut self, addr: u16) -> u16 {
-        let hi = self.bus.read(addr);
-        let lo = self.bus.read(addr + 1);
+        let lo = self.bus.read(addr);
+        let hi = self.bus.read(addr.wrapping_add(1));
 
-        return u16::from_le_bytes([hi, lo]);
+        return u16::from_le_bytes([lo, hi]);
     }
 
     // Addresssing Modes
@@ -174,9 +172,11 @@ impl CPU {
     }
 
     fn ZP0(&mut self) -> u8 {
-        self.instruction_address_abs = self.bus.read(self.pc) as u16 & 0x00FF as u16;
+        let base = self.bus.read(self.pc) as u16;
 
-        self.pc = self.pc + 1;
+        self.pc = self.pc.wrapping_add(1);
+
+        self.instruction_address_abs = base & 0x00FF as u16;
 
         return 0;
     }
@@ -185,15 +185,18 @@ impl CPU {
         let base = self.bus.read(self.pc) as u16;
 
         self.pc = self.pc.wrapping_add(1);
+
         self.instruction_address_abs = (base + self.x as u16) & 0x00FF as u16;
 
         return 0 as u8;
     }
 
     fn ZPY(&mut self) -> u8 {
-        self.instruction_address_abs = (self.bus.read(self.pc) + self.y) as u16;
+        let base = self.bus.read(self.pc) as u16;
 
-        self.pc = self.pc + 1;
+        self.pc = self.pc.wrapping_add(1);
+
+        self.instruction_address_abs = base.wrapping_add(self.y as u16);
 
         return 0;
     }
@@ -211,27 +214,28 @@ impl CPU {
     }
 
     fn ABS(&mut self) -> u8 {
-        let hi = self.bus.read(self.pc);
-        let lo = self.bus.read(self.pc.wrapping_add(1));
+        let lo = self.bus.read(self.pc);
+        let hi = self.bus.read(self.pc.wrapping_add(1));
 
         self.pc = self.pc.wrapping_add(2);
 
-        self.instruction_address_abs = u16::from_le_bytes([hi, lo]);
+        self.instruction_address_abs = u16::from_le_bytes([lo, hi]);
 
         return 0;
     }
 
     fn ABX(&mut self) -> u8 {
-        let hi = self.bus.read(self.pc);
-        let lo = self.bus.read(self.pc.wrapping_add(1));
+        let lo = self.bus.read(self.pc);
+        let hi = self.bus.read(self.pc.wrapping_add(1));
 
         self.pc = self.pc.wrapping_add(2);
 
-        self.instruction_address_abs = u16::from_le_bytes([hi, lo]);
-        self.instruction_address_abs = self.instruction_address_abs.wrapping_add(self.x as u16);
+        let base = u16::from_le_bytes([lo, hi]);
+
+        self.instruction_address_abs = base.wrapping_add(self.x as u16);
 
         // Check if instruction is changing page and return a additional cycle if true
-        if (self.instruction_address_abs & 0xFF00) != u16::from_le_bytes([hi, lo]) {
+        if (self.instruction_address_abs & 0xFF00) != (base & 0xFF00) {
             return 1;
         }
 
@@ -239,16 +243,16 @@ impl CPU {
     }
 
     fn ABY(&mut self) -> u8 {
-        let hi = self.bus.read(self.pc);
-        let lo = self.bus.read(self.pc.wrapping_add(1));
+        let lo = self.bus.read(self.pc);
+        let hi = self.bus.read(self.pc.wrapping_add(1));
 
         self.pc = self.pc.wrapping_add(2);
 
-        self.instruction_address_abs = u16::from_le_bytes([hi, lo]);
-        self.instruction_address_abs = self.instruction_address_abs.wrapping_add(self.y as u16);
+        let base = u16::from_le_bytes([lo, hi]);
+        self.instruction_address_abs = base.wrapping_add(self.y as u16);
 
         // Check if instruction is changing page and return a additional cycle if true
-        if (self.instruction_address_abs & 0xFF00) != u16::from_le_bytes([hi, lo]) {
+        if (self.instruction_address_abs & 0xFF00) != (base & 0xFF00) {
             return 1;
         }
 
@@ -257,23 +261,23 @@ impl CPU {
 
     // Hardware pointers from 6502
     fn IND(&mut self) -> u8 {
-        let ptr_hi = self.bus.read(self.pc);
-        let ptr_lo = self.bus.read(self.pc.wrapping_add(1));
+        let ptr_lo = self.bus.read(self.pc);
+        let ptr_hi = self.bus.read(self.pc.wrapping_add(1));
 
         self.pc = self.pc.wrapping_add(2);
 
-        let ptr_full = u16::from_le_bytes([ptr_hi, ptr_lo]);
+        let ptr_full = u16::from_le_bytes([ptr_lo, ptr_hi]);
 
         if ptr_lo == 0x00FF {
             let hi = self.bus.read(ptr_full & 0xFF00 as u16);
-            let lo = self.bus.read(ptr_full + 0);
+            let lo = self.bus.read(ptr_full);
 
-            self.instruction_address_abs = u16::from_le_bytes([hi, lo]);
+            self.instruction_address_abs = u16::from_le_bytes([lo, hi]);
         } else {
-            let hi = self.bus.read(ptr_full + 1);
-            let lo = self.bus.read(ptr_full + 0);
+            let hi = self.bus.read(ptr_full.wrapping_add(1));
+            let lo = self.bus.read(ptr_full);
 
-            self.instruction_address_abs = u16::from_le_bytes([hi, lo]);
+            self.instruction_address_abs = u16::from_le_bytes([lo, hi]);
         }
 
         return 0;
@@ -286,10 +290,10 @@ impl CPU {
 
         let hi = self
             .bus
-            .read(((pointer as u16) + (self.x as u16)) & 0x00FF as u16);
+            .read(((pointer as u16).wrapping_add(self.x as u16)) & 0x00FF as u16);
         let lo = self
             .bus
-            .read(((pointer as u16) + (self.x as u16) + 1) & 0x00FF as u16);
+            .read(((pointer as u16).wrapping_add(self.x as u16).wrapping_add(1)) & 0x00FF as u16);
 
         self.instruction_address_abs = u16::from_le_bytes([hi, lo]);
 
@@ -305,11 +309,10 @@ impl CPU {
         let lo = self.bus.read(((pointer as u16) + 1) & 0x00FF as u16);
 
         let base = u16::from_le_bytes([hi, lo]);
-        let addr = base.wrapping_add(self.y as u16);
 
-        self.instruction_address_abs = addr;
+        self.instruction_address_abs = base.wrapping_add(self.y as u16);
 
-        if (base & 0xFF00) != (addr & 0xFF00) {
+        if (base & 0xFF00) != (self.instruction_address_abs & 0xFF00) {
             1
         } else {
             0
@@ -322,12 +325,10 @@ impl CPU {
 
         self.set_flag(Flags::I, 1);
 
-        self.bus
-            .write(0x0100 + self.sp as u16, ((self.pc >> 8) & 0x00FF) as u8);
-        self.sp = self.sp.wrapping_sub(1);
-        self.bus
-            .write(0x0100 + self.sp as u16, (self.pc & 0x00FF) as u8);
-        self.sp = self.sp.wrapping_sub(1);
+        self.push((self.pc >> 8) as u8);
+        self.push((self.pc & 0x00FF) as u8);
+
+        self.push(self.status as u8);
 
         return 0x00;
     }
@@ -408,9 +409,12 @@ impl CPU {
     fn ADC(&mut self) -> u8 {
         let fetched = self.bus.read(self.instruction_address_abs as u16);
 
-        let temp = (self.a + fetched + self.get_flag(Flags::C)) as u128;
+        let temp = self
+            .a
+            .wrapping_add(fetched)
+            .wrapping_add(self.get_flag(Flags::C) as u8);
 
-        if temp & 0xFF00 > 0 {
+        if (temp as u16) & 0xFF00 > 0 {
             self.set_flag(Flags::C, 1)
         }
 
@@ -608,6 +612,19 @@ mod tests {
 
         cpu.step();
 
-        assert_eq!(cpu.pc, 0x0001);
+        assert_eq!(cpu.pc, 0x0002);
+    }
+
+    #[test]
+    fn imm_resolves_to_correct_address() {
+        let mut cpu = CPU::new();
+
+        cpu.pc = 1; // after opcode fetch
+
+        cpu.bus.write(0x0001, 0x42);
+        cpu.IMM();
+
+        assert_eq!(cpu.instruction_address_abs, 0x0001);
+        assert_eq!(cpu.pc, 0x0002);
     }
 }

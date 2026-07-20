@@ -941,8 +941,8 @@ impl Instruction {
         Instruction {
             name: InstructionsNames::BCC,
             function: CPU::BCC,
-            mode: CPU::IMP,
-            cycles: 0,
+            mode: CPU::REL,
+            cycles: 2,
         },
         Instruction {
             name: InstructionsNames::STA,
