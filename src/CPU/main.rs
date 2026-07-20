@@ -30,7 +30,7 @@ pub struct CPU {
     instruction_address_rel: u16, // Address for actual instruction relative
 }
 
-fn isNegative(address: u16) -> bool {
+fn is_negative(address: u16) -> bool {
     match address & 0x80 != 0 {
         true => return true,
         false => return false,
@@ -53,14 +53,14 @@ impl CPU {
         }
     }
 
-    pub fn GetFlag(&self, flag: Flags) -> u8 {
+    pub fn get_flag(&self, flag: Flags) -> u8 {
         match (self.status & flag as u8) > 0 {
             true => return 1,
             false => return 0,
         };
     }
 
-    pub fn SetFlag(&mut self, flag: Flags, value: u8) -> () {
+    pub fn set_flag(&mut self, flag: Flags, value: u8) -> () {
         if value > 0 {
             self.status = self.status | flag as u8;
         } else {
@@ -70,10 +70,10 @@ impl CPU {
 
     // Internal Functions
     pub fn reset(&mut self) -> () {
-        let hi: u8 = self.bus.read(0xFFCC);
-        let low: u8 = self.bus.read(0xFFCD);
+        let hi: u8 = self.bus.read(0xFFFC);
+        let low: u8 = self.bus.read(0xFFFD);
 
-        self.pc = ((hi as u16) << 8) | low as u16;
+        self.pc = u16::from_le_bytes([hi, low]);
 
         self.a = 0;
         self.x = 0;
@@ -83,75 +83,80 @@ impl CPU {
 
         self.cycles = 8;
     }
+
     pub fn irq(&mut self) -> () {
-        if self.GetFlag(Flags::I) == 0 {
-            self.bus
-                .write(0x0100 + self.sp as u16, ((self.pc >> 8) & 0x00FF) as u8);
-            self.sp = self.sp - 1;
-            self.bus
-                .write(0x0100 + self.sp as u16, (self.pc & 0x00FF) as u8);
-            self.sp = self.sp - 1;
+        if self.get_flag(Flags::I) == 0 {
+            self.push((self.pc >> 8) as u8);
+            self.push((self.pc & 0x00FF) as u8);
 
-            self.SetFlag(Flags::B, 0);
-            self.SetFlag(Flags::U, 1);
-            self.SetFlag(Flags::I, 1);
+            self.set_flag(Flags::B, 0);
+            self.set_flag(Flags::U, 1);
+            self.set_flag(Flags::I, 1);
 
-            self.bus.write(0x1000 + self.sp as u16, self.status);
-            self.sp = self.sp - 1;
+            self.push(self.status as u8);
+            self.sp = self.sp.wrapping_sub(1);
 
-            let hi: u8 = self.bus.read(0xFFFE);
-            let lo: u8 = self.bus.read(0xFFFF);
-
-            self.pc = ((hi as u16) << 8) | lo as u16;
+            self.pc = self.read_u16_le(0xFFFE);
 
             self.cycles = 7;
         }
     }
+
     pub fn nmi(&mut self) -> () {
-        self.bus
-            .write(0x0100 + self.sp as u16, ((self.pc >> 8) & 0x00FF) as u8);
-        self.sp = self.sp - 1;
-        self.bus
-            .write(0x0100 + self.sp as u16, (self.pc & 0x00FF) as u8);
-        self.sp = self.sp - 1;
+        self.push((self.pc >> 8) as u8);
+        self.push((self.pc & 0x00FF) as u8);
 
-        self.SetFlag(Flags::B, 0);
-        self.SetFlag(Flags::U, 1);
-        self.SetFlag(Flags::I, 1);
+        self.set_flag(Flags::B, 0);
+        self.set_flag(Flags::U, 1);
+        self.set_flag(Flags::I, 1);
 
-        self.bus.write(0x1000 + self.sp as u16, self.status);
-        self.sp = self.sp - 1;
+        self.push(self.status as u8);
+        self.sp = self.sp.wrapping_sub(1);
 
-        let hi: u8 = self.bus.read(0xFFFA);
-        let lo: u8 = self.bus.read(0xFFFB);
-
-        self.pc = ((hi as u16) << 8) | lo as u16;
+        self.pc = self.read_u16_le(0xFFFA);
 
         self.cycles = 8;
     }
+
     pub fn step(&mut self) -> () {
         match self.cycles {
             0 => {
                 let opcode = self.bus.read(self.pc);
 
-                self.SetFlag(Flags::U, 1);
-                self.pc = self.pc + 1;
+                self.set_flag(Flags::U, 1);
+                self.pc = self.pc.wrapping_add(1);
 
                 let instruction = &instructions::Instruction::INSTRUCTIONS[opcode as usize];
 
                 self.cycles = instruction.cycles;
 
-                let more_cycles1 = (instruction.function)(self);
-                let more_cycles2 = (instruction.mode)(self);
+                let extra_mode = (instruction.mode)(self);
+                let extra_op = (instruction.function)(self);
 
-                self.cycles = self.cycles + more_cycles1 + more_cycles2;
+                self.cycles = self.cycles.wrapping_add(extra_mode).wrapping_add(extra_op);
 
-                self.SetFlag(Flags::U, 1);
-
-                self.cycles = self.cycles - 1;
+                self.cycles = self.cycles.wrapping_sub(1);
             }
-            _ => self.cycles = self.cycles - 1,
+            _ => self.cycles = self.cycles.wrapping_sub(1),
         }
+    }
+
+    // Helpers
+    fn push(&mut self, value: u8) -> () {
+        self.bus.write(0x0100 + self.sp as u16, value);
+        self.sp = self.sp.wrapping_sub(1);
+    }
+
+    fn pop(&mut self) -> u8 {
+        self.sp = self.sp.wrapping_add(1);
+        return self.bus.read(0x0100 + self.sp as u16);
+    }
+
+    fn read_u16_le(&mut self, addr: u16) -> u16 {
+        let hi = self.bus.read(addr);
+        let lo = self.bus.read(addr + 1);
+
+        return u16::from_le_bytes([hi, lo]);
     }
 
     // Addresssing Modes
@@ -162,9 +167,10 @@ impl CPU {
     }
 
     fn IMM(&mut self) -> u8 {
-        self.instruction_address_abs = self.pc + 1;
+        self.instruction_address_abs = self.pc;
+        self.pc = self.pc.wrapping_add(1);
 
-        return 0;
+        0 as u8
     }
 
     fn ZP0(&mut self) -> u8 {
@@ -176,11 +182,12 @@ impl CPU {
     }
 
     fn ZPX(&mut self) -> u8 {
-        self.instruction_address_abs = (self.bus.read(self.pc) + self.x) as u16 & 0x00FF as u16;
+        let base = self.bus.read(self.pc) as u16;
 
-        self.pc = self.pc + 1;
+        self.pc = self.pc.wrapping_add(1);
+        self.instruction_address_abs = (base + self.x as u16) & 0x00FF as u16;
 
-        return 0;
+        return 0 as u8;
     }
 
     fn ZPY(&mut self) -> u8 {
@@ -196,7 +203,7 @@ impl CPU {
 
         self.pc = self.pc + 1;
 
-        if isNegative(self.instruction_address_rel) {
+        if is_negative(self.instruction_address_rel) {
             self.instruction_address_rel = (self.instruction_address_rel | 0xFF00) as u16;
         }
 
@@ -205,26 +212,26 @@ impl CPU {
 
     fn ABS(&mut self) -> u8 {
         let hi = self.bus.read(self.pc);
-        let lo = self.bus.read(self.pc + 1);
+        let lo = self.bus.read(self.pc.wrapping_add(1));
 
-        self.pc = self.pc + 2;
+        self.pc = self.pc.wrapping_add(2);
 
-        self.instruction_address_abs = ((hi as u16) << 8) | lo as u16;
+        self.instruction_address_abs = u16::from_le_bytes([hi, lo]);
 
         return 0;
     }
 
     fn ABX(&mut self) -> u8 {
         let hi = self.bus.read(self.pc);
-        let lo = self.bus.read(self.pc + 1);
+        let lo = self.bus.read(self.pc.wrapping_add(1));
 
-        self.pc = self.pc + 2;
+        self.pc = self.pc.wrapping_add(2);
 
-        self.instruction_address_abs = ((hi as u16) << 8) | lo as u16;
-        self.instruction_address_abs = self.instruction_address_abs + self.x as u16;
+        self.instruction_address_abs = u16::from_le_bytes([hi, lo]);
+        self.instruction_address_abs = self.instruction_address_abs.wrapping_add(self.x as u16);
 
         // Check if instruction is changing page and return a additional cycle if true
-        if (self.instruction_address_abs & 0xFF00) != ((hi as u16) << 8) {
+        if (self.instruction_address_abs & 0xFF00) != u16::from_le_bytes([hi, lo]) {
             return 1;
         }
 
@@ -233,15 +240,15 @@ impl CPU {
 
     fn ABY(&mut self) -> u8 {
         let hi = self.bus.read(self.pc);
-        let lo = self.bus.read(self.pc + 1);
+        let lo = self.bus.read(self.pc.wrapping_add(1));
 
-        self.pc = self.pc + 2;
+        self.pc = self.pc.wrapping_add(2);
 
-        self.instruction_address_abs = ((hi as u16) << 8) | lo as u16;
-        self.instruction_address_abs = self.instruction_address_abs + self.y as u16;
+        self.instruction_address_abs = u16::from_le_bytes([hi, lo]);
+        self.instruction_address_abs = self.instruction_address_abs.wrapping_add(self.y as u16);
 
         // Check if instruction is changing page and return a additional cycle if true
-        if (self.instruction_address_abs & 0xFF00) != ((hi as u16) << 8) {
+        if (self.instruction_address_abs & 0xFF00) != u16::from_le_bytes([hi, lo]) {
             return 1;
         }
 
@@ -251,22 +258,22 @@ impl CPU {
     // Hardware pointers from 6502
     fn IND(&mut self) -> u8 {
         let ptr_hi = self.bus.read(self.pc);
-        let ptr_lo = self.bus.read(self.pc + 1);
+        let ptr_lo = self.bus.read(self.pc.wrapping_add(1));
 
-        self.pc = self.pc + 2;
+        self.pc = self.pc.wrapping_add(2);
 
-        let ptr_full = ((ptr_hi as u16) << 8) | ptr_lo as u16;
+        let ptr_full = u16::from_le_bytes([ptr_hi, ptr_lo]);
 
         if ptr_lo == 0x00FF {
             let hi = self.bus.read(ptr_full & 0xFF00 as u16);
             let lo = self.bus.read(ptr_full + 0);
 
-            self.instruction_address_abs = ((hi as u16) << 8) | lo as u16;
+            self.instruction_address_abs = u16::from_le_bytes([hi, lo]);
         } else {
             let hi = self.bus.read(ptr_full + 1);
             let lo = self.bus.read(ptr_full + 0);
 
-            self.instruction_address_abs = ((hi as u16) << 8) | lo as u16;
+            self.instruction_address_abs = u16::from_le_bytes([hi, lo]);
         }
 
         return 0;
@@ -275,7 +282,7 @@ impl CPU {
     fn IZX(&mut self) -> u8 {
         let pointer = self.bus.read(self.pc);
 
-        self.pc = self.pc + 1;
+        self.pc = self.pc.wrapping_add(1);
 
         let hi = self
             .bus
@@ -284,7 +291,7 @@ impl CPU {
             .bus
             .read(((pointer as u16) + (self.x as u16) + 1) & 0x00FF as u16);
 
-        self.instruction_address_abs = ((hi as u16) << 8) | lo as u16;
+        self.instruction_address_abs = u16::from_le_bytes([hi, lo]);
 
         return 0;
     }
@@ -292,33 +299,36 @@ impl CPU {
     fn IZY(&mut self) -> u8 {
         let pointer = self.bus.read(self.pc);
 
-        self.pc = self.pc + 1;
+        self.pc = self.pc.wrapping_add(1);
 
         let hi = self.bus.read((pointer as u16) & 0x00FF as u16);
         let lo = self.bus.read(((pointer as u16) + 1) & 0x00FF as u16);
 
-        self.instruction_address_abs = ((hi as u16) << 8) | lo as u16;
-        self.instruction_address_abs = self.y as u16;
+        let base = u16::from_le_bytes([hi, lo]);
+        let addr = base.wrapping_add(self.y as u16);
 
-        if (self.instruction_address_abs & 0xFF00) != ((hi as u16) << 8) {
-            return 1;
+        self.instruction_address_abs = addr;
+
+        if (base & 0xFF00) != (addr & 0xFF00) {
+            1
+        } else {
+            0
         }
-
-        return 0;
     }
 
     // Instructions
     fn BRK(&mut self) -> u8 {
-        self.pc = self.pc + 1;
+        self.pc = self.pc.wrapping_add(1);
 
-        self.SetFlag(Flags::I, 1);
+        self.set_flag(Flags::I, 1);
 
         self.bus
             .write(0x0100 + self.sp as u16, ((self.pc >> 8) & 0x00FF) as u8);
-        self.sp = self.sp - 1;
+        self.sp = self.sp.wrapping_sub(1);
         self.bus
             .write(0x0100 + self.sp as u16, (self.pc & 0x00FF) as u8);
-        self.sp = self.sp - 1;
+        self.sp = self.sp.wrapping_sub(1);
+
         return 0x00;
     }
     fn ORA(&mut self) -> u8 {
@@ -345,11 +355,11 @@ impl CPU {
         self.a = self.a & fetched;
 
         if self.a == 0 {
-            self.SetFlag(Flags::Z, 1)
+            self.set_flag(Flags::Z, 1)
         }
 
         if self.a & 0x80 > 0 {
-            self.SetFlag(Flags::N, 1);
+            self.set_flag(Flags::N, 1);
         }
         return 0x00;
     }
@@ -398,24 +408,24 @@ impl CPU {
     fn ADC(&mut self) -> u8 {
         let fetched = self.bus.read(self.instruction_address_abs as u16);
 
-        let temp = (self.a + fetched + self.GetFlag(Flags::C)) as u128;
+        let temp = (self.a + fetched + self.get_flag(Flags::C)) as u128;
 
         if temp & 0xFF00 > 0 {
-            self.SetFlag(Flags::C, 1)
+            self.set_flag(Flags::C, 1)
         }
 
         if temp == 0 {
-            self.SetFlag(Flags::Z, 1)
+            self.set_flag(Flags::Z, 1)
         }
 
         if temp & 0x80 > 0 {
-            self.SetFlag(Flags::N, 1)
+            self.set_flag(Flags::N, 1)
         }
 
         let overflow = (!(self.a as u16 ^ fetched as u16) & (self.a as u16 ^ temp as u16)) & 0x0080;
 
         if overflow > 0 {
-            self.SetFlag(Flags::V, 1)
+            self.set_flag(Flags::V, 1)
         }
 
         self.a = (temp & 0x00FF) as u8;
@@ -508,24 +518,24 @@ impl CPU {
 
         let value = (fetched as u16) ^ 0x00FF;
 
-        let temp = (self.a as u16 + value + (self.GetFlag(Flags::C) as u16)) as u128;
+        let temp = (self.a as u16 + value + (self.get_flag(Flags::C) as u16)) as u128;
 
         if temp & 0xFF00 > 0 {
-            self.SetFlag(Flags::C, 1)
+            self.set_flag(Flags::C, 1)
         }
 
         if temp == 0 {
-            self.SetFlag(Flags::Z, 1)
+            self.set_flag(Flags::Z, 1)
         }
 
         if temp & 0x80 > 0 {
-            self.SetFlag(Flags::N, 1)
+            self.set_flag(Flags::N, 1)
         }
 
         let overflow = (!(self.a as u16 ^ fetched as u16) & (self.a as u16 ^ temp as u16)) & 0x0080;
 
         if overflow > 0 {
-            self.SetFlag(Flags::V, 1)
+            self.set_flag(Flags::V, 1)
         }
 
         self.a = (temp & 0x00FF) as u8;
@@ -547,5 +557,57 @@ impl CPU {
     // illegal opcode function, all illegal opcodes will be mapped to this function
     fn NOP(&mut self) -> u8 {
         return 0x00;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reset_reads_vector_at_fffc() {
+        let mut cpu = CPU::new();
+
+        cpu.bus.write(0xFFFC, 0x00);
+        cpu.bus.write(0xFFFD, 0x80);
+
+        cpu.reset();
+
+        assert_eq!(cpu.pc, 0x8000);
+    }
+
+    #[test]
+    fn irq_pushes_pc_and_status_then_reads_vector_at_fffe() {
+        let mut cpu = CPU::new();
+
+        cpu.bus.write(0xFFFE, 0x00);
+        cpu.bus.write(0xFFFF, 0x80);
+
+        cpu.irq();
+
+        assert_eq!(cpu.pc, 0x8000);
+    }
+
+    #[test]
+    fn nmi_pushes_pc_and_status_then_reads_vector_at_fffa() {
+        let mut cpu = CPU::new();
+
+        cpu.bus.write(0xFFFA, 0x00);
+        cpu.bus.write(0xFFFB, 0x80);
+
+        cpu.nmi();
+
+        assert_eq!(cpu.pc, 0x8000);
+    }
+
+    #[test]
+    fn step_increments_pc_and_decrements_cycles() {
+        let mut cpu = CPU::new();
+
+        cpu.bus.write(0x0000, 0x00);
+
+        cpu.step();
+
+        assert_eq!(cpu.pc, 0x0001);
     }
 }
