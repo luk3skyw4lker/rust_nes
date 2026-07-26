@@ -975,8 +975,8 @@ impl Instruction {
             cycles: 4,
         },
         Instruction {
-            name: InstructionsNames::STY,
-            function: CPU::STY,
+            name: InstructionsNames::STX,
+            function: CPU::STX,
             mode: CPU::ZPY,
             cycles: 4,
         },
@@ -995,7 +995,7 @@ impl Instruction {
         Instruction {
             name: InstructionsNames::STA,
             function: CPU::STA,
-            mode: CPU::IMP,
+            mode: CPU::ABY,
             cycles: 5,
         },
         Instruction {
